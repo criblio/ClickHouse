@@ -1,4 +1,6 @@
-FROM ubuntu:22.04
+# Use the internal Cribl base image
+ARG IMAGE_REPO
+FROM ${IMAGE_REPO}:22.04
 
 # see https://github.com/moby/moby/issues/4032#issuecomment-192327844
 # It could be removed after we move on a version 23:04+
