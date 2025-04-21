@@ -1,13 +1,9 @@
-#include <Core/Field.h>
-#include <Core/Settings.h>
 #include <DataTypes/DataTypeNullable.h>
 #include <DataTypes/DataTypeString.h>
-#include <Formats/FormatFactory.h>
 #include <Formats/FormatSettings.h>
 #include <Functions/FunctionFactory.h>
+#include <Formats/FormatFactory.h>
 #include <Functions/IFunction.h>
-#include <Functions/keyvaluepair/impl/KeyValuePairExtractor.h>
-#include <Functions/keyvaluepair/impl/KeyValuePairExtractorBuilder.h>
 #include <IO/ReadBufferFromMemory.h>
 #include <IO/ReadHelpers.h>
 #include <Interpreters/Context.h>
