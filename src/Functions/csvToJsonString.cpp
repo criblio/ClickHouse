@@ -42,8 +42,8 @@ namespace
   * - All other values are treated as strings
   * 
   * Example:
-  * csvToJSONString('name,age', 'John,42') = '{"name":"John","age":42}'
-  * csvToJSONString('name|age', 'John|42', ) SETTINGS format_csv_delimiter = '|' = '{"name":"John","age":42}'
+  * csvToJSONString('name,age', 'John,42') => '{"name":"John","age":42}'
+  * csvToJSONString('name|age', 'John|42') SETTINGS format_csv_delimiter = '|' = '{"name":"John","age":42}'
   */
 class FunctionCsvToJsonString final : public IFunction
 {
@@ -55,7 +55,7 @@ private:
       * @param vectorBuffer A pre-allocated vector to store the split fields
       * @param settings CSV format settings that control parsing behavior (delimiter, quotes, etc)
       */
-    static void splitCSV(const StringRef & s, std::vector<std::string> & vectorBuffer, const FormatSettings::CSV & settings)
+    static void splitCSV(const StringRef & s, Strings & vectorBuffer, const FormatSettings::CSV & settings)
     {
         ReadBufferFromMemory buf(s.data, s.size);
         vectorBuffer.clear();
@@ -80,8 +80,8 @@ private:
       * @param detectTypes A boolean flag to determine if types should be detected and converted
       */
     static void mergeAsJSON(
-        const std::vector<std::string> & fieldNames,
-        const std::vector<std::string> & fieldValues,
+        const Strings & fieldNames,
+        const Strings & fieldValues,
         const FormatSettings::CSV & settings,
         std::stringstream & dest,
         bool detectTypes)
@@ -92,7 +92,9 @@ private:
         for (size_t i = 0; i < n; ++i)
         {
             if (fieldNames.at(i).empty())
+            {
                 continue;
+            }
 
             auto key = fieldNames.at(i);
             auto value = fieldValues.at(i);
@@ -130,7 +132,7 @@ private:
             }
         }
 
-        dest.str("");
+        dest.str(""); // reset std::stringstream
         json.stringify(dest);
     }
 
@@ -165,8 +167,7 @@ public:
         }
 
         // First argument must be a non-null string (field names)
-        WhichDataType which(arguments[0]);
-        if (!which.isString())
+        if (!WhichDataType(arguments[0]).isStringOrFixedString())
         {
             throw Exception(
                 ErrorCodes::ILLEGAL_TYPE_OF_ARGUMENT,
@@ -175,10 +176,8 @@ public:
                 arguments[0]->getName());
         }
 
-        // Second argument must be (nullable) string (CSV values)
-        which = WhichDataType(arguments[1]);
-        bool isCSVNullable = which.isNullable();
-        if (!which.isString() && !isCSVNullable)
+        // Second argument must be (nullable) string (CSV values) or just NULL (nothing)
+        if (auto type = WhichDataType(removeNullable(arguments[1])); !(type.isStringOrFixedString() || type.isNothing()))
         {
             throw Exception(
                 ErrorCodes::ILLEGAL_TYPE_OF_ARGUMENT,
@@ -188,21 +187,18 @@ public:
         }
 
         // Third argument (if present) must be a boolean (detectTypes)
-        if (arguments.size() == 3)
+        if (arguments.size() == 3 && !WhichDataType(arguments[2]).isUInt8())
         {
-            which = WhichDataType(arguments[2]);
-            if (!which.isUInt8())
-            {
-                throw Exception(
-                    ErrorCodes::ILLEGAL_TYPE_OF_ARGUMENT,
-                    "Third argument (detectTypes) of function {} must be Boolean, got {}",
-                    getName(),
-                    arguments[2]->getName());
-            }
+            throw Exception(
+                ErrorCodes::ILLEGAL_TYPE_OF_ARGUMENT,
+                "Third argument (detectTypes) of function {} must be Boolean, got {}",
+                getName(),
+                arguments[2]->getName());
         }
 
         // function either returns nullable string if CSV input is nullable, or a string otherwise
-        return isCSVNullable ? makeNullable(std::make_shared<DataTypeString>()) : std::make_shared<DataTypeString>();
+        return WhichDataType(arguments[1]).isNullable() ? makeNullable(std::make_shared<DataTypeString>())
+                                                        : std::make_shared<DataTypeString>();
     }
 
     bool isSuitableForShortCircuitArgumentsExecution(const DataTypesWithConstInfo & /*arguments*/) const override { return false; }
@@ -231,18 +227,19 @@ public:
         if (const auto * constFieldNames = checkAndGetColumnConst<ColumnString>(arguments[0].column.get()); constFieldNames)
         {
             const auto fieldNamesStr = constFieldNames->getDataAt(0);
-            std::vector<std::string> fieldNames;
+            Strings fieldNames;
             fieldNames.reserve(128);
 
             // parse out the field names (just once)
             splitCSV(fieldNamesStr, fieldNames, settings);
 
+            // buffer for split CSV values
+            Strings vectorBuffer;
+            vectorBuffer.reserve(128);
+
             // csv value also provided as a string constant?
             if (const auto * constCSV = checkAndGetColumnConst<ColumnString>(arguments[1].column.get()); constCSV)
             {
-                std::vector<std::string> vectorBuffer;
-                vectorBuffer.reserve(128);
-
                 splitCSV(constCSV->getValue<String>(), vectorBuffer, settings);
                 mergeAsJSON(fieldNames, vectorBuffer, settings, dest, detectTypes);
                 return DataTypeString().createColumnConst(input_rows_count, dest.str());
@@ -251,9 +248,6 @@ public:
             // csv value provided as a string (or nullable string) column
             if (const auto * colCSV = checkAndGetColumn<ColumnString>(removeNullable(arguments[1].column).get()))
             {
-                std::vector<std::string> vectorBuffer;
-                vectorBuffer.reserve(128);
-
                 // Check if input is nullable to determine result column type
                 const auto * colNullable = typeid_cast<const ColumnNullable *>(arguments[1].column.get());
                 const auto * null_map = colNullable ? &colNullable->getNullMapData() : nullptr;

@@ -34,6 +34,9 @@ SELECT 11 as T, csvToJSONString ('id,property,name', '3,true,"end quote missing'
 -- should be just "String" (output is non-nullable if input is non-nullable)
 SELECT 12 as T, toTypeName(csvToJSONString ('id,property,name', csv)) AS type FROM csv_to_json_test LIMIT 1;
 
+-- empty (not null) CSV fields are empty JSON strings (here property)
+SELECT 13 as T, csvToJSONString ('id,property,name', 'foo,,bar') AS json;
+
 DROP TABLE csv_to_json_test;
 
 ----------------------------------------------------------------------------------------------
@@ -49,10 +52,10 @@ VALUES
     (4, NULL);
 
 -- ensure that null-values in CSV (\\N) are detected as well as full CSV can be NULL
-SELECT 13 as T, csvToJSONString('col1,col2,col3', csv) AS JSON from csv_to_json_test_nullable;
-SELECT 14 as T, csvToJSONString('c1,c2', NULL) AS JSON;
+SELECT 14 as T, csvToJSONString('col1,col2,col3', csv) AS JSON from csv_to_json_test_nullable;
+SELECT 15 as T, csvToJSONString('c1,c2', NULL) AS JSON;
 
 -- should be "Nullable(String)" (output is nullable if input is nullable)
-SELECT 15 as T, toTypeName(csvToJSONString ('id,property,name', csv)) AS type FROM csv_to_json_test_nullable LIMIT 1;
+SELECT 16 as T, toTypeName(csvToJSONString ('id,property,name', csv)) AS type FROM csv_to_json_test_nullable LIMIT 1;
 
 DROP TABLE csv_to_json_test_nullable;
