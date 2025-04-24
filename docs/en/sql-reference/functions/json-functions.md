@@ -1123,9 +1123,9 @@ JSON functions to access specific field information. Note that this processing i
 than simply splitting the string by the delimiting character as it considers these delimiters also
 within quoted strings.
 
-The third function parameter is an optional [Boolean](../data-types/boolean.md) and allows switching 
-of (on by default) the automatic detection of data types before producing the JSON output. If
-enabled, a string "42" would be stored as numeric in the JSON output.
+The third function parameter is an optional [String](../data-types/string.md) and allows the
+overriding of CSV format settings per function invocation instance instead of using the query-level
+settings. 
 
 The standard [CSV format settings](../../interfaces/formats/CSV/CSV.md) apply to the CSV parsing 
 of this function.
@@ -1134,14 +1134,14 @@ of this function.
 
 ```sql
 csvToJSONString(fieldNames, csvString)
-csvToJSONString(fieldNames, csvString, detectTypes)
+csvToJSONString(fieldNames, csvString, options)
 ```
 
 **Arguments**
 
 - `fieldNames` — The field names (essentially CSV header) that should be merged into the JSON output. You can omit fields from the output by providing an empty field name at its position, like `field1,,field3` to omit `field2` in the output. This parameter has to be a non-nullable [String](../data-types/string.md) constant.
 - `csvString` - The name of the [String](../data-types/string.md) column or literal that contains the CSV that should be parsed. The column can be nullable.
-- `detectTypes` - If provided and set to false, it suppresses the automatic conversion to native JSON types.
+- `options` - Allows overwriting CSV parsing options. There is one additional `detect_types` option that defaults to true. It allows to disable the automatic detection of native JSON data types in the output by setting it to false.
 
 **Returned value**
 
@@ -1154,7 +1154,7 @@ Query:
 ```sql
 SELECT csvToJSONString('name,age', 'John,42');
 SELECT csvToJSONString('name|age', 'Clark|15') SETTINGS format_csv_delimiter='|';
-SELECT csvToJSONString('name,age,active', 'Bob,17,true', false);
+SELECT csvToJSONString('name$age', 'Clark$15', 'format_csv_delimiter="$",detect_types=false');
 ```
 
 Result:
@@ -1162,7 +1162,7 @@ Result:
 ```text
 {"age":42,"name":"John"}
 {"age":15,"name":"Clark"}
-{"active":"true","age":"17","name":"Bob"}
+{"age":"15","name":"Clark"}
 ```
 
 ### JSONArrayLength {#jsonarraylength}

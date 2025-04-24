@@ -1,9 +1,11 @@
 #include <DataTypes/DataTypeNullable.h>
 #include <DataTypes/DataTypeString.h>
+#include <Formats/FormatFactory.h>
 #include <Formats/FormatSettings.h>
 #include <Functions/FunctionFactory.h>
-#include <Formats/FormatFactory.h>
 #include <Functions/IFunction.h>
+#include <Functions/keyvaluepair/impl/KeyValuePairExtractor.h>
+#include <Functions/keyvaluepair/impl/KeyValuePairExtractorBuilder.h>
 #include <IO/ReadBufferFromMemory.h>
 #include <IO/ReadHelpers.h>
 #include <Interpreters/Context.h>
@@ -29,7 +31,7 @@ namespace
   * The function takes two or three arguments:
   * - fieldNames: A comma-separated string of field names (must be a string constant)
   * - csvValue: A comma-separated string of values (nullable)
-  * - optional flag to indicate if we want to auto-detect the types of values (default is true)
+  * - optional key/value parameters to control the CSV parsing behavior
   *
   * The function returns a JSON string where the field names are mapped to their corresponding values.
   * Unless disabled, the function attempts to detect the types of values and convert them appropriately:
@@ -39,7 +41,8 @@ namespace
   * 
   * Example:
   * csvToJSONString('name,age', 'John,42') => '{"name":"John","age":42}'
-  * csvToJSONString('name|age', 'John|42') SETTINGS format_csv_delimiter = '|' = '{"name":"John","age":42}'
+  * csvToJSONString('name|age', 'John|42') SETTINGS format_csv_delimiter = '|' => '{"name":"John","age":42}'
+  * csvToJSONString('name$age', 'John$42', 'delimiter="$") => '{"name":"John","age":42}'
   */
 class FunctionCsvToJsonString final : public IFunction
 {
@@ -132,6 +135,114 @@ private:
         json.stringify(dest);
     }
 
+    /** Parses CSV parsing options from a string and updates the settings.
+      * @param optionsStr The input string containing CSV parsing options
+      * @param settings Reference to the FormatSettings::CSV object to update
+      * @param detectTypes Reference to the boolean flag to update
+      */
+    static void parseOptions(const String & optionsStr, FormatSettings::CSV & settings, bool & detectTypes)
+    {
+        auto config
+            = KeyValuePairExtractorBuilder().withKeyValueDelimiter('=').withItemDelimiters({',', ';'}).withQuotingCharacter('"').build();
+
+        auto keys = ColumnString::create();
+        auto values = ColumnString::create();
+        const auto numPairs = config->extract(optionsStr, keys, values);
+
+        auto toBoolean = [](const StringRef & settingName, const StringRef & value) -> bool
+        {
+            if (value == "true" || value == "on")
+            {
+                return true;
+            }
+            else if (value == "false" || value == "off")
+            {
+                return false;
+            }
+
+            throw Exception(
+                ErrorCodes::BAD_ARGUMENTS, "Invalid value for {} boolean format setting: {}", settingName.toString(), value.toString());
+        };
+
+        for (size_t i = 0; i < numPairs; ++i)
+        {
+            auto key = Poco::toLower(keys->getDataAt(i).toString());
+            auto value = values->getDataAt(i).toString();
+
+            // remove the foramt prefix if present
+            if (key.starts_with("format_csv_"))
+            {
+                key = key.substr(11);
+            }
+
+            if (key == "delimiter" || key == "custom_delimiter")
+            {
+                if (value.size() == 1)
+                {
+                    settings.delimiter = value.c_str()[0];
+                    settings.custom_delimiter = "";
+                }
+                else
+                {
+                    settings.custom_delimiter = value;
+                    settings.delimiter = '\0';
+                }
+            }
+            else if (key == "custom_quote" || key == "quote" || key == "quotechar")
+            {
+                // by default, we allow both single and double quotes...
+                // ...specifying one will disable the other
+                if (value == "'")
+                {
+                    settings.allow_double_quotes = false;
+                    settings.custom_quote = '\0';
+                }
+                else if (value == "\"")
+                {
+                    settings.allow_single_quotes = false;
+                    settings.custom_quote = '\0';
+                }
+                else
+                {
+                    if (value.size() == 1)
+                    {
+                        settings.allow_double_quotes = false;
+                        settings.allow_single_quotes = false;
+                        settings.custom_quote = value.c_str()[0];
+                    }
+                    else
+                    {
+                        throw Exception(ErrorCodes::BAD_ARGUMENTS, "Quote must be a single quote character, got {}", value);
+                    }
+                }
+            }
+            else if (key == "allow_single_quotes" || key == "allowsingleQuotes")
+            {
+                settings.allow_single_quotes = toBoolean(key, value);
+            }
+            else if (key == "allow_double_quotes" || key == "allowdoublequotes")
+            {
+                settings.allow_double_quotes = toBoolean(key, value);
+            }
+            else if (key == "null_representation" || key == "null" || key == "nullrepresentation")
+            {
+                settings.null_representation = value;
+            }
+            else if (key == "detect_types" || key == "detecttypes")
+            {
+                detectTypes = toBoolean(key, value);
+            }
+            else if (key == "trim_whitespaces" || key == "trimwhitespaces")
+            {
+                settings.trim_whitespaces = toBoolean(key, value);
+            }
+            else
+            {
+                throw Exception(ErrorCodes::BAD_ARGUMENTS, "Unknown option: {} in function {}", keys->getDataAt(i).toString(), name);
+            }
+        }
+    }
+
 public:
     static constexpr auto name = "csvToJSONString";
 
@@ -150,8 +261,8 @@ public:
     // we do our own null handling for inputs
     virtual bool useDefaultImplementationForNulls() const override { return false; }
 
-    // col:0 is the list of field names, col:2 is a (default true) Boolean to indicate if we want to auto-detect...
-    // ...the types of values - both must be constants
+    // col:0 is the list of field names, col:2 is a String for invocation-specific format options...
+    // ...both must be constants
     virtual ColumnNumbers getArgumentsThatAreAlwaysConstant() const override { return {0, 2}; }
 
     DataTypePtr getReturnTypeImpl(const DataTypes & arguments) const override
@@ -182,12 +293,12 @@ public:
                 arguments[1]->getName());
         }
 
-        // Third argument (if present) must be a boolean (detectTypes)
-        if (arguments.size() == 3 && !WhichDataType(arguments[2]).isUInt8())
+        // Third argument (if present) must be a String (options)
+        if (arguments.size() == 3 && !WhichDataType(removeNullable(arguments[2])).isStringOrFixedString())
         {
             throw Exception(
                 ErrorCodes::ILLEGAL_TYPE_OF_ARGUMENT,
-                "Third argument (detectTypes) of function {} must be Boolean, got {}",
+                "Third argument (options) of function {} must be String or Null, got {}",
                 getName(),
                 arguments[2]->getName());
         }
@@ -206,16 +317,16 @@ public:
             return ColumnString::create(); // fast path for empty input
         }
 
-        FormatSettings::CSV settings = getFormatSettings(context).csv;
+        FormatSettings::CSV settings = getFormatSettings(context).csv; // default settings
         std::stringstream dest;
         bool detectTypes = true;
 
         // did we receive a non-null option third argument with CSV parsing options?
         if (arguments.size() == 3)
         {
-            if (const auto * constOptions = checkAndGetColumnConst<ColumnUInt8>(arguments[2].column.get()); constOptions)
+            if (const auto * constOptions = checkAndGetColumnConst<ColumnString>(removeNullable(arguments[2].column).get()); constOptions)
             {
-                detectTypes = constOptions->getValue<UInt8>() != 0;
+                parseOptions(constOptions->getValue<String>(), settings, detectTypes);
             }
         }
 

@@ -16,9 +16,9 @@ VALUES
 
 -- with default and with SETTINGS override
 SELECT 1 as T, csvToJSONString ('id,property,name', csv) AS json FROM csv_to_json_test WHERE entry < 5 ORDER BY entry;
-SELECT 2 as T, csvToJSONString ('id|property|name', csv) AS json FROM csv_to_json_test WHERE entry == 5 SETTINGS format_csv_delimiter='|';
-SELECT 3 as T, csvToJSONString ('id|property|name', csv, true) AS json FROM csv_to_json_test WHERE entry == 5 SETTINGS format_csv_delimiter='|';
-SELECT 4 as T, csvToJSONString ('id|property|name', csv, false) AS json FROM csv_to_json_test WHERE entry == 5 SETTINGS format_csv_delimiter='|';
+SELECT 2 as T, csvToJSONString ('id|property|name', csv, 'delimiter="|"') AS json FROM csv_to_json_test WHERE entry == 5;
+SELECT 3 as T, csvToJSONString ('id|property|name', csv, 'delimiter="|",detectTypes=true') AS json FROM csv_to_json_test WHERE entry == 5;
+SELECT 4 as T, csvToJSONString ('id|property|name', csv, 'delimiter="|",detectTypes=false') AS json FROM csv_to_json_test WHERE entry == 5;
 
 -- skip fields in the output
 SELECT 5 as T, csvToJSONString (',property,name', csv) AS json FROM csv_to_json_test WHERE entry < 3 ORDER BY entry;
@@ -31,11 +31,11 @@ SELECT 9 as T, csvToJSONString ('f1,f2,f3,f4,f5', csv) AS json FROM csv_to_json_
 SELECT 10 as T, csvToJSONString ('id,property,name', '') AS json;
 SELECT 11 as T, csvToJSONString ('id,property,name', '3,true,"end quote missing') AS json;
 
--- should be just "String" (output is non-nullable if input is non-nullable)
-SELECT 12 as T, toTypeName(csvToJSONString ('id,property,name', csv)) AS type FROM csv_to_json_test LIMIT 1;
-
 -- empty (not null) CSV fields are empty JSON strings (here property)
-SELECT 13 as T, csvToJSONString ('id,property,name', 'foo,,bar') AS json;
+SELECT 12 as T, csvToJSONString ('id,property,name', 'foo,,bar') AS json;
+
+-- should be just "String" (output is non-nullable if input is non-nullable)
+SELECT 13 as T, toTypeName(csvToJSONString ('id,property,name', csv)) AS type FROM csv_to_json_test LIMIT 1;
 
 DROP TABLE csv_to_json_test;
 
@@ -59,3 +59,10 @@ SELECT 15 as T, csvToJSONString('c1,c2', NULL) AS JSON;
 SELECT 16 as T, toTypeName(csvToJSONString ('id,property,name', csv)) AS type FROM csv_to_json_test_nullable LIMIT 1;
 
 DROP TABLE csv_to_json_test_nullable;
+
+----------------------------------------------------------------------------------------------
+-- third, more on options
+----------------------------------------------------------------------------------------------
+SELECT 17 as T, csvToJSONString ('col1!col2!col3!col4', 
+                                 '$fiel1$!$field$$2$!42!NIL', 
+                                 'delimiter="!",quote="$",format_csv_null_representation="NIL"') AS json;
