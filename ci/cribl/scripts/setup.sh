@@ -15,6 +15,6 @@ unzip awscliv2.zip
 curl -fsSL https://download.docker.com/linux/ubuntu/gpg | gpg --dearmor -o /etc/apt/keyrings/docker.gpg
 echo "deb [arch=$(get_arch) signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/ubuntu \
   $(. /etc/os-release && echo "$VERSION_CODENAME") stable" >> /etc/apt/sources.list.d/docker.list
-apt update && apt install -y docker-ce-cli
+apt-get update && apt-get install -y docker-ce-cli
 
 git submodule update --init -j $(nproc)
