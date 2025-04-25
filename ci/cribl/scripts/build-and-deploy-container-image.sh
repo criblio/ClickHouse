@@ -17,10 +17,11 @@ fi
 cp ${1} ${DOCKER_BUILD_DIR}/
 
 REGION="us-west-2"
-ECR_REPO="${SAAS_OPS_ACCOUNT}.dkr.ecr.${REGION}.amazonaws.com/cribl-cloud/clickhouse-server"
+ECR_REG="${SAAS_OPS_ACCOUNT}.dkr.ecr.${REGION}.amazonaws.com"
+ECR_REPO="${ECR_REG}/cribl-cloud/clickhouse-server"
 BASE_IMAGE_REPO="${SAAS_OPS_ACCOUNT}.dkr.ecr.${REGION}.amazonaws.com/cribl-cloud/ubuntu-base"
 # TODO: Replace the commit with a semver once that's added
 VERSION_TAG="$(git rev-parse HEAD)"
 
-aws ecr get-login-password --region $REGION | docker login --username AWS --password-stdin $ECR_REGISTRY_NAME || exit 1
+aws ecr get-login-password --region ${REGION} | docker login --username AWS --password-stdin ${ECR_REG} || exit 1
 docker build --build-arg IMAGE_REPO=${BASE_IMAGE_REPO} -t ${ECR_REPO}:${VERSION_TAG} --push -f ${DOCKER_BUILD_FILE} ${DOCKER_BUILD_DIR}
