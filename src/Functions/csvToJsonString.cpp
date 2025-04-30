@@ -1,3 +1,6 @@
+#include "Columns/ColumnNullable.h"
+#include "Columns/ColumnString.h"
+#include "FunctionHelpers.h"
 #include <DataTypes/DataTypeNullable.h>
 #include <DataTypes/DataTypeString.h>
 #include <Formats/FormatFactory.h>
@@ -11,9 +14,6 @@
 #include <Interpreters/Context.h>
 #include <Poco/JSON/Object.h>
 #include <Poco/NumberParser.h>
-#include "Columns/ColumnNullable.h"
-#include "Columns/ColumnString.h"
-#include "FunctionHelpers.h"
 
 namespace DB
 {
@@ -42,7 +42,7 @@ namespace
   * Example:
   * csvToJSONString('name,age', 'John,42') => '{"name":"John","age":42}'
   * csvToJSONString('name|age', 'John|42') SETTINGS format_csv_delimiter = '|' => '{"name":"John","age":42}'
-  * csvToJSONString('name$age', 'John$42', 'delimiter="$") => '{"name":"John","age":42}'
+  * csvToJSONString('name$age', 'John$42', 'delimiter="$"') => '{"name":"John","age":42}'
   */
 class FunctionCsvToJsonString final : public IFunction
 {
@@ -169,7 +169,7 @@ private:
             auto key = Poco::toLower(keys->getDataAt(i).toString());
             auto value = values->getDataAt(i).toString();
 
-            // remove the foramt prefix if present
+            // remove the format prefix if present
             if (key.starts_with("format_csv_"))
             {
                 key = key.substr(11);
@@ -179,7 +179,7 @@ private:
             {
                 if (value.size() == 1)
                 {
-                    settings.delimiter = value.c_str()[0];
+                    settings.delimiter = value[0];
                     settings.custom_delimiter = "";
                 }
                 else
@@ -188,19 +188,19 @@ private:
                     settings.delimiter = '\0';
                 }
             }
-            else if (key == "custom_quote" || key == "quote" || key == "quotechar")
+            else if (key == "custom_quotes" || key == "quotes" || key == "quote" || key == "quotechar")
             {
                 // by default, we allow both single and double quotes...
                 // ...specifying one will disable the other
                 if (value == "'")
                 {
                     settings.allow_double_quotes = false;
-                    settings.custom_quote = '\0';
+                    settings.custom_quotes = '\0';
                 }
                 else if (value == "\"")
                 {
                     settings.allow_single_quotes = false;
-                    settings.custom_quote = '\0';
+                    settings.custom_quotes = '\0';
                 }
                 else
                 {
@@ -208,7 +208,7 @@ private:
                     {
                         settings.allow_double_quotes = false;
                         settings.allow_single_quotes = false;
-                        settings.custom_quote = value.c_str()[0];
+                        settings.custom_quotes = value.c_str()[0];
                     }
                     else
                     {

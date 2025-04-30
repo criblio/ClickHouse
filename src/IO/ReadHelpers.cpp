@@ -912,7 +912,7 @@ bool isQuoteCharacter(char c, const FormatSettings::CSV & settings)
 {
     return (settings.allow_single_quotes && c == '\'') 
         || (settings.allow_double_quotes && c == '"')
-        || (settings.custom_quote != '\0' && c == settings.custom_quote);
+        || (settings.custom_quotes != '\0' && c == settings.custom_quotes);
 }
 
 template <typename Vector, bool include_quotes, bool allow_throw>

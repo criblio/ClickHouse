@@ -65,4 +65,4 @@ DROP TABLE csv_to_json_test_nullable;
 ----------------------------------------------------------------------------------------------
 SELECT 17 as T, csvToJSONString ('col1!col2!col3!col4', 
                                  '$fiel1$!$field$$2$!42!NIL', 
-                                 'delimiter="!",quote="$",format_csv_null_representation="NIL"') AS json;
+                                 'delimiter="!",custom_quotes="$",format_csv_null_representation="NIL"') AS json;
