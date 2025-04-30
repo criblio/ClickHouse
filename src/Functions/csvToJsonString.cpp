@@ -7,13 +7,12 @@
 #include <Formats/FormatSettings.h>
 #include <Functions/FunctionFactory.h>
 #include <Functions/IFunction.h>
-#include <Functions/keyvaluepair/impl/KeyValuePairExtractor.h>
-#include <Functions/keyvaluepair/impl/KeyValuePairExtractorBuilder.h>
 #include <IO/ReadBufferFromMemory.h>
 #include <IO/ReadHelpers.h>
 #include <Interpreters/Context.h>
 #include <Poco/JSON/Object.h>
 #include <Poco/NumberParser.h>
+#include <Functions/keyvaluepair/impl/KeyValuePairExtractorBuilder.h>
 
 namespace DB
 {
@@ -143,11 +142,11 @@ private:
     static void parseOptions(const String & optionsStr, FormatSettings::CSV & settings, bool & detectTypes)
     {
         auto config
-            = KeyValuePairExtractorBuilder().withKeyValueDelimiter('=').withItemDelimiters({',', ';'}).withQuotingCharacter('"').build();
+            = KeyValuePairExtractorBuilder().withKeyValueDelimiter('=').withItemDelimiters({',', ';'}).withQuotingCharacter('"').buildWithoutEscaping();
 
         auto keys = ColumnString::create();
         auto values = ColumnString::create();
-        const auto numPairs = config->extract(optionsStr, keys, values);
+        const auto numPairs = config.extract(optionsStr, keys, values);
 
         auto toBoolean = [](const StringRef & settingName, const StringRef & value) -> bool
         {
