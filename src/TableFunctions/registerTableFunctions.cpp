@@ -22,6 +22,7 @@ void registerTableFunctions()
     registerTableFunctionValues(factory);
     registerTableFunctionInput(factory);
     registerTableFunctionGenerate(factory);
+    registerTableFunctionCriblFlex(factory);
 #if USE_MONGODB
     registerTableFunctionMongoDB(factory);
 #endif
