@@ -1079,6 +1079,12 @@ Method to write Errors to text output.
     DECLARE(String, format_schema, "", R"(
 This parameter is useful when you are using formats that require a schema definition, such as [Cap'n Proto](https://capnproto.org/) or [Protobuf](https://developers.google.com/protocol-buffers/). The value depends on the format.
 )", 0) \
+    DECLARE(String, format_flex_materialized_fields, "", R"(
+Defines the fields (from nested format) that are pulled out as dynamic columns to the table level. These support predicate pushdown.
+)", 0) \
+    DECLARE(String, format_flex_data_fields, "", R"(
+Defines the fields that are ending up in the data column. If not set, all fields are included.
+)", 0) \
     DECLARE(String, format_template_resultset, "", R"(
 Path to file which contains format string for result set (for Template format)
 )", 0) \

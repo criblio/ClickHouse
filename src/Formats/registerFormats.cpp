@@ -66,6 +66,7 @@ void registerInputFormatORC(FormatFactory & factory);
 void registerOutputFormatORC(FormatFactory & factory);
 void registerInputFormatParquet(FormatFactory & factory);
 void registerOutputFormatParquet(FormatFactory & factory);
+void registerInputFormatParquetFlex(FormatFactory & factory);
 void registerInputFormatArrow(FormatFactory & factory);
 void registerOutputFormatArrow(FormatFactory & factory);
 void registerInputFormatAvro(FormatFactory & factory);
@@ -220,6 +221,7 @@ void registerFormats()
     registerOutputFormatORC(factory);
     registerInputFormatParquet(factory);
     registerOutputFormatParquet(factory);
+    registerInputFormatParquetFlex(factory);
     registerInputFormatAvro(factory);
     registerOutputFormatAvro(factory);
     registerInputFormatArrow(factory);
