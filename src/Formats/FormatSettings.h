@@ -393,6 +393,12 @@ struct FormatSettings
         std::string output_format_schema;
     } schema{};
 
+    struct 
+    {
+        String materialized_fields;
+        String data_fields;
+    } flex{};
+
     struct
     {
         String resultset_format;
