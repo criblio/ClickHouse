@@ -9,6 +9,10 @@
 #include <absl/container/flat_hash_map.h>
 
 
+namespace re2 {
+    class RE2;
+}
+
 namespace DB
 {
 
@@ -97,6 +101,23 @@ void filterByPathOrFile(std::vector<T> & sources, const std::vector<String> & pa
     sources = std::move(filtered_sources);
 }
 
+ColumnPtr getFilterByCriblPath(const std::vector<String> & paths, const ExpressionActionsPtr & actions, const NamesAndTypesList & virtual_columns, const ContextPtr & context, re2::RE2 & cribl_matcher, std::vector<std::string> & cols);
+template <typename T>
+void filterByCribPathOrFile(std::vector<T> & sources, const std::vector<String> & paths, const ExpressionActionsPtr & actions, const NamesAndTypesList & virtual_columns, const ContextPtr & context, re2::RE2 & cribl_matcher, std::vector<std::string> & cols)
+{
+    auto indexes_column = getFilterByCriblPath(paths, actions, virtual_columns, context, cribl_matcher, cols);
+    const auto & indexes = typeid_cast<const ColumnUInt64 &>(*indexes_column).getData();
+    if (indexes.size() == sources.size())
+        return;
+
+    std::vector<T> filtered_sources;
+    filtered_sources.reserve(indexes.size());
+    for (auto index : indexes)
+        filtered_sources.emplace_back(std::move(sources[index]));
+    sources = std::move(filtered_sources);
+}
+
+
 struct VirtualsForFileLikeStorage
 {
     const String & path;
@@ -114,6 +135,25 @@ using HivePartitioningKeysAndValues = absl::flat_hash_map<std::string_view, std:
 
 HivePartitioningKeysAndValues parseHivePartitioningKeysAndValues(const String & path);
 
+using CriblPartitioningKeysAndValyes =absl::flat_hash_map<String, std::string_view>;
+
+CriblPartitioningKeysAndValyes parseCriblPartitioningKeysAndValues(const String & path, const std::string & regex);
+
+struct CriblPathInfo {
+    std::vector<std::string> virtual_columns;
+    std::string regex;
+};
+
+CriblPathInfo criblPathRegexFromPath(const std::string & path);
+
+VirtualColumnsDescription addCriblPathVirtuals(VirtualColumnsDescription & desc, const ContextPtr & context, const std::string & path, std::optional<FormatSettings> format_settings_, const std::string & path_template);
+
+void addCriblRequestedFileLikeStorageVirtualsToChunk(
+    Chunk & chunk,
+    const NamesAndTypesList & requested_virtual_columns,
+    std::string path,
+    re2::RE2 & matcher,
+    std::vector<String> & columns);
 }
 
 }

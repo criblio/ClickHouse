@@ -1,8 +1,12 @@
 #include <memory>
 #include <stack>
+#include <string_view>
+#include <vector>
 
 #include <Storages/VirtualColumnUtils.h>
 #include "Formats/NumpyDataTypes.h"
+#include "base/types.h"
+#include <Common/re2.h>
 
 #include <Core/NamesAndTypes.h>
 #include <Core/TypeId.h>
@@ -182,6 +186,72 @@ HivePartitioningKeysAndValues parseHivePartitioningKeysAndValues(const String & 
 
     return key_values;
 }
+CriblPartitioningKeysAndValyes parseCriblPartitioningKeysAndValues(const String & path, const re2::RE2 & matcher, const std::vector<String> & columns)
+{
+    CriblPartitioningKeysAndValyes key_values;
+    re2::StringPiece input(path);
+
+    std::vector<re2::StringPiece> matches;
+    matches.resize(matcher.NumberOfCapturingGroups() + 1);
+
+    if (matcher.Match(input, 0, input.size(), RE2::UNANCHORED, matches.data(), matches.size()))
+    {
+        // Skip the first match (full match) and process only capturing groups
+        for (size_t i = 1; i < matches.size(); ++i)
+        {
+            if (i - 1 < columns.size())
+            {
+                std::string_view match(matches[i].data(), matches[i].size());
+                key_values[columns[i - 1]] = match;
+            }
+        }
+    }
+
+    return key_values;
+}
+
+
+
+CriblPathInfo criblPathRegexFromPath(const std::string & path)
+{
+    CriblPathInfo result;
+    // Replace Cribl template variables like ${token} with regex patterns
+    const std::string & regex = path;
+
+    // Match ${variable} pattern
+
+    const re2::RE2 template_pattern(R"(\$\{([^}]+)\})");
+
+    std::vector<std::string> columns;
+
+    re2::StringPiece input(regex);
+    std::string rewritten;
+    re2::StringPiece submatch;
+    size_t pos = 0;
+
+    while (template_pattern.Match(input, pos, input.size(), RE2::UNANCHORED, &submatch, 1))
+    {
+        // Add text before the match
+        rewritten.append(input.data() + pos, submatch.data() - input.data() - pos);
+
+        const std::string match(submatch);
+
+        const std::string token(match.substr(2, match.size() - 3));
+        columns.emplace_back(token);
+
+        // Replace any template variable with wildcard pattern
+        rewritten += "(?P<" + token + ">[^/]+)";
+
+        pos = submatch.data() - input.data() + submatch.size();
+    }
+
+    // Add remaining text
+    rewritten.append(input.data() + pos, input.size() - pos);
+
+    result.virtual_columns = columns;
+    result.regex = rewritten;
+    return result;
+}
 
 VirtualColumnsDescription getVirtualsForFileLikeStorage(ColumnsDescription & storage_columns, const ContextPtr & context, const std::string & path, std::optional<FormatSettings> format_settings_)
 {
@@ -234,6 +304,40 @@ VirtualColumnsDescription getVirtualsForFileLikeStorage(ColumnsDescription & sto
     return desc;
 }
 
+VirtualColumnsDescription addCriblPathVirtuals(VirtualColumnsDescription & desc, const ContextPtr & context, const std::string & path, std::optional<FormatSettings> format_settings_, const std::string & path_template)
+{
+    
+    auto add_virtual = [&](const NameAndTypePair & pair)
+    {
+        const auto & name = pair.getNameInStorage();
+        const auto & type = pair.getTypeInStorage();
+
+        desc.addEphemeral(name, type, "");
+    };
+
+    auto extractor = VirtualColumnUtils::criblPathRegexFromPath(path_template);
+    re2::RE2 matcher(extractor.regex);
+
+    const auto map = parseCriblPartitioningKeysAndValues(path, matcher, extractor.virtual_columns);
+    auto format_settings = format_settings_ ? *format_settings_ : getFormatSettings(context);
+
+    for (const auto & item : map)
+    {
+        const std::string key(item.first);
+        const std::string value(item.second);
+
+        auto type = tryInferDataTypeByEscapingRule(value, format_settings, FormatSettings::EscapingRule::Raw);
+
+        if (type == nullptr)
+            type = std::make_shared<DataTypeString>();
+        if (type->canBeInsideLowCardinality())
+            add_virtual({key, std::make_shared<DataTypeLowCardinality>(type)});
+        else
+            add_virtual({key, type});
+    }
+    return desc;
+}
+
 static void addPathAndFileToVirtualColumns(Block & block, const String & path, size_t idx, const FormatSettings & format_settings, bool use_hive_partitioning)
 {
     if (block.has("_path"))
@@ -267,6 +371,19 @@ static void addPathAndFileToVirtualColumns(Block & block, const String & path, s
     block.getByName("_idx").column->assumeMutableRef().insert(idx);
 }
 
+static void addCriblPartitionsToVirtualColumns(Block & block, const String & path, const FormatSettings & format_settings, re2::RE2 & cribl_matcher, std::vector<std::string> & cols)
+{  
+
+    const auto keys_and_values = parseCriblPartitioningKeysAndValues(path, cribl_matcher, cols);
+    for (const auto & [key, value] : keys_and_values)
+    {
+        if (const auto * column = block.findByName(key))
+        {
+            ReadBufferFromString buf(value);
+            column->type->getDefaultSerialization()->deserializeWholeText(column->column->assumeMutableRef(), buf, format_settings);
+        }
+    }
+}
 std::optional<ActionsDAG> createPathAndFileFilterDAG(const ActionsDAG::Node * predicate, const NamesAndTypesList & virtual_columns)
 {
     if (!predicate || virtual_columns.empty())
@@ -303,6 +420,29 @@ ColumnPtr getFilterByPathAndFileIndexes(const std::vector<String> & paths, const
     return block.getByName("_idx").column;
 }
 
+ColumnPtr getFilterByCriblPath(const std::vector<String> & paths, const ExpressionActionsPtr & actions, const NamesAndTypesList & virtual_columns, const ContextPtr & context, re2::RE2 & cribl_matcher, std::vector<std::string> & cols)
+{
+    Block block;
+    NameSet common_virtuals = getVirtualNamesForFileLikeStorage();
+    for (const auto & column : virtual_columns)
+    {
+        if (column.name == "_file" || column.name == "_path" || !common_virtuals.contains(column.name))
+            block.insert({column.type->createColumn(), column.type, column.name});
+    }
+    block.insert({ColumnUInt64::create(), std::make_shared<DataTypeUInt64>(), "_idx"});
+
+    for (size_t i = 0; i != paths.size(); ++i) { 
+        addPathAndFileToVirtualColumns(block, paths[i], i, getFormatSettings(context), context->getSettingsRef()[Setting::use_hive_partitioning]);
+        addCriblPartitionsToVirtualColumns(block,paths[i], getFormatSettings(context), cribl_matcher, cols);
+    }
+
+    filterBlockWithExpression(actions, block);
+
+    return block.getByName("_idx").column;
+}
+
+
+// need to add columns to chunk for it to work
 void addRequestedFileLikeStorageVirtualsToChunk(
     Chunk & chunk, const NamesAndTypesList & requested_virtual_columns,
     VirtualsForFileLikeStorage virtual_values, ContextPtr context)
@@ -354,6 +494,23 @@ void addRequestedFileLikeStorageVirtualsToChunk(
                 chunk.addColumn(virtual_column.type->createColumnConst(chunk.getNumRows(), (*virtual_values.etag))->convertToFullColumnIfConst());
             else
                 chunk.addColumn(virtual_column.type->createColumnConstWithDefaultValue(chunk.getNumRows())->convertToFullColumnIfConst());
+        }
+    }
+}
+
+void addCriblRequestedFileLikeStorageVirtualsToChunk(
+    Chunk & chunk,
+    const NamesAndTypesList & requested_virtual_columns,
+    std::string path,
+    re2::RE2 & matcher,
+    std::vector<String> & columns)
+{
+    const auto cribl_path_columns = parseCriblPartitioningKeysAndValues(path, matcher, columns);
+    for (const auto & virtual_column : requested_virtual_columns)
+    {
+        if (auto it = cribl_path_columns.find(virtual_column.getNameInStorage()); it != cribl_path_columns.end())
+        {
+            chunk.addColumn(virtual_column.type->createColumnConst(chunk.getNumRows(), convertFieldToType(Field(it->second), *virtual_column.type))->convertToFullColumnIfConst());
         }
     }
 }

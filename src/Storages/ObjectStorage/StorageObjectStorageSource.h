@@ -1,5 +1,6 @@
 #pragma once
 #include <Common/re2.h>
+#include "Storages/VirtualColumnUtils.h"
 #include <Interpreters/Context_fwd.h>
 #include <IO/Archives/IArchiveReader.h>
 #include <Processors/SourceWithKeyCondition.h>
@@ -26,6 +27,7 @@ public:
     class GlobIterator;
     class KeysIterator;
     class ArchiveIterator;
+    class CriblTemplateIterator;
 
     StorageObjectStorageSource(
         String name_,
@@ -209,6 +211,57 @@ private:
     bool first_iteration = true;
     std::mutex next_mutex;
     const ContextPtr local_context;
+
+    std::function<void(FileProgress)> file_progress_callback;
+};
+
+class StorageObjectStorageSource::CriblTemplateIterator : public IObjectIterator, WithContext
+{
+public:
+    CriblTemplateIterator(
+        ObjectStoragePtr object_storage_,
+        ConfigurationPtr configuration_,
+        const ActionsDAG::Node * predicate,
+        const NamesAndTypesList & virtual_columns_,
+        ContextPtr context_,
+        ObjectInfos * read_keys_,
+        size_t list_object_keys_size,
+        bool throw_on_zero_files_match_,
+        std::function<void(FileProgress)> file_progress_callback_ = {});
+
+    ~CriblTemplateIterator() override = default;
+
+    ObjectInfoPtr next(size_t processor) override;
+
+    size_t estimatedKeysCount() override;
+
+private:
+    ObjectInfoPtr nextUnlocked(size_t processor);
+    std::string regexFromPath(const std::string & path);
+    const ObjectStoragePtr object_storage;
+    const ConfigurationPtr configuration;
+    const NamesAndTypesList virtual_columns;
+    const bool throw_on_zero_files_match;
+    const LoggerPtr log;
+
+    size_t index = 0;
+
+    ObjectInfos object_infos;
+    ObjectInfos * read_keys;
+    ExpressionActionsPtr filter_expr;
+    ObjectStorageIteratorPtr object_storage_iterator;
+    bool recursive{false};
+    std::vector<String> expanded_keys;
+    std::vector<String>::iterator expanded_keys_iter;
+
+    std::unique_ptr<re2::RE2> matcher;
+
+    bool is_finished = false;
+    bool first_iteration = true;
+    std::mutex next_mutex;
+    const ContextPtr local_context;
+
+    VirtualColumnUtils::CriblPathInfo path_matcher;
 
     std::function<void(FileProgress)> file_progress_callback;
 };
