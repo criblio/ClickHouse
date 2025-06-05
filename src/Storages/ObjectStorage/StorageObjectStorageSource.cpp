@@ -151,7 +151,20 @@ std::shared_ptr<IObjectIterator> StorageObjectStorageSource::createFileIterator(
                         "Expression can not have wildcards inside {} name", configuration->getNamespaceType());
 
     std::unique_ptr<IObjectIterator> iterator;
-    if (configuration->isPathWithGlobs())
+    if (configuration->isCriblSyntax())
+    {
+        iterator = std::make_unique<CriblTemplateIterator>(
+            object_storage,
+            configuration,
+            predicate,
+            virtual_columns,
+            local_context,
+            read_keys,
+            query_settings.list_object_keys_size,
+            false,
+            file_progress_callback);
+    }
+    else if (configuration->isPathWithGlobs())
     {
         auto path = configuration->getPath();
         if (hasExactlyOneBracketsExpansion(path))
@@ -255,15 +268,30 @@ Chunk StorageObjectStorageSource::generate()
 
             chassert(object_info->metadata);
 
+            const auto path = getUniqueStoragePathIdentifier(*configuration, *object_info, false);
+            const VirtualColumnUtils::VirtualsForFileLikeStorage virtual_values({
+                .path = path,
+                .size = object_info->isArchive() ? object_info->fileSizeInArchive() : object_info->metadata->size_bytes,
+                .filename = &filename,
+                .last_modified = object_info->metadata->last_modified,
+                .etag = &(object_info->metadata->etag)});
+
             VirtualColumnUtils::addRequestedFileLikeStorageVirtualsToChunk(
                 chunk,
                 read_from_format_info.requested_virtual_columns,
-                {.path = getUniqueStoragePathIdentifier(*configuration, *object_info, false),
-                 .size = object_info->isArchive() ? object_info->fileSizeInArchive() : object_info->metadata->size_bytes,
-                 .filename = &filename,
-                 .last_modified = object_info->metadata->last_modified,
-                 .etag = &(object_info->metadata->etag)},
+                virtual_values,
                 read_context);
+
+            //  add cribl columns to chunk 
+            auto path_matcher =VirtualColumnUtils::criblPathRegexFromPath(configuration->getPath());
+            const auto matcher = std::make_unique<re2::RE2>(path_matcher.regex);
+
+            VirtualColumnUtils::addCriblRequestedFileLikeStorageVirtualsToChunk(
+                chunk,
+                read_from_format_info.requested_virtual_columns,
+                path,
+                *matcher, 
+                path_matcher.virtual_columns);
 
             if (chunk_size && chunk.hasColumns())
             {
@@ -1075,6 +1103,132 @@ ObjectInfoPtr StorageObjectStorageSource::ArchiveIterator::next(size_t processor
 size_t StorageObjectStorageSource::ArchiveIterator::estimatedKeysCount()
 {
     return archives_iterator->estimatedKeysCount();
+}
+
+StorageObjectStorageSource::CriblTemplateIterator::CriblTemplateIterator(
+    ObjectStoragePtr object_storage_,
+    ConfigurationPtr configuration_,
+    const ActionsDAG::Node * predicate,
+    const NamesAndTypesList & virtual_columns_,
+    ContextPtr context_,
+    ObjectInfos * read_keys_,
+    size_t list_object_keys_size,
+    bool throw_on_zero_files_match_,
+    std::function<void(FileProgress)> file_progress_callback_)
+    : WithContext(context_)
+    , object_storage(object_storage_)
+    , configuration(configuration_)
+    , virtual_columns(virtual_columns_)
+    , throw_on_zero_files_match(throw_on_zero_files_match_)
+    , log(getLogger("CriblTemplateIterator"))
+    , read_keys(read_keys_)
+    , local_context(context_)
+    , file_progress_callback(file_progress_callback_)
+{
+    // TODO: handle input validation.
+    if (auto filter_dag = VirtualColumnUtils::createPathAndFileFilterDAG(predicate, virtual_columns))
+    {
+        VirtualColumnUtils::buildSetsForDAG(*filter_dag, getContext());
+        filter_expr = std::make_shared<ExpressionActions>(std::move(*filter_dag));
+    }
+    path_matcher = VirtualColumnUtils::criblPathRegexFromPath(configuration->getPath());
+    matcher = std::make_unique<re2::RE2>(path_matcher.regex);
+    if (!matcher->ok())
+    {
+        throw Exception(
+            ErrorCodes::CANNOT_COMPILE_REGEXP, "Cannot compile regex from path ({}): {}", configuration->getPath(), matcher->error());
+    }
+
+    object_storage_iterator = object_storage->iterate(configuration->getBasePathForCriblSyntax(), list_object_keys_size);
+}
+
+
+ObjectInfoPtr StorageObjectStorageSource::CriblTemplateIterator::next(size_t /* processor */)
+{
+    std::lock_guard lock(next_mutex);
+    return nextUnlocked(0);
+}
+
+ObjectInfoPtr StorageObjectStorageSource::CriblTemplateIterator::nextUnlocked(size_t /* processor */)
+{
+   bool current_batch_processed = object_infos.empty() || index >= object_infos.size();
+    if (is_finished && current_batch_processed)
+        return {};
+
+    if (current_batch_processed)
+    {
+        ObjectInfos new_batch;
+        while (new_batch.empty())
+        {
+            auto result = object_storage_iterator->getCurrentBatchAndScheduleNext();
+            if (!result.has_value())
+            {
+                is_finished = true;
+                return {};
+            }
+
+            new_batch = std::move(result.value());
+            for (auto it = new_batch.begin(); it != new_batch.end();)
+            {
+                if (!recursive && !re2::RE2::FullMatch((*it)->getPath(), *matcher))
+                    it = new_batch.erase(it);
+                else
+                    ++it;
+            }
+
+            if (filter_expr)
+            {
+                std::vector<String> paths;
+                paths.reserve(new_batch.size());
+                for (const auto & object_info : new_batch)
+                    paths.push_back(getUniqueStoragePathIdentifier(*configuration, *object_info, false));
+
+                VirtualColumnUtils::filterByCribPathOrFile(
+                    new_batch, paths, filter_expr, virtual_columns, local_context, *matcher, path_matcher.virtual_columns);
+
+                LOG_TEST(log, "Filtered files: {} -> {}", paths.size(), new_batch.size());
+            }
+        }
+
+        index = 0;
+
+        if (read_keys)
+            read_keys->insert(read_keys->end(), new_batch.begin(), new_batch.end());
+
+        object_infos = std::move(new_batch);
+
+        if (file_progress_callback)
+        {
+            for (const auto & object_info : object_infos)
+            {
+                chassert(object_info->metadata);
+                file_progress_callback(FileProgress(0, object_info->metadata->size_bytes));
+            }
+        }
+    }
+
+    if (index >= object_infos.size())
+    {
+        throw Exception(
+            ErrorCodes::LOGICAL_ERROR,
+            "Index out of bound for blob metadata. Index: {}, size: {}",
+            index, object_infos.size());
+    }
+
+    return object_infos[index++];
+}
+
+size_t StorageObjectStorageSource::CriblTemplateIterator::estimatedKeysCount()
+{
+    if (object_infos.empty() && !is_finished && object_storage_iterator->isValid())
+    {
+        /// 1000 files were listed, and we cannot make any estimation of _how many more_ there are (because we list bucket lazily);
+        /// If there are more objects in the bucket, limiting the number of streams is the last thing we may want to do
+        /// as it would lead to serious slow down of the execution, since objects are going
+        /// to be fetched sequentially rather than in-parallel with up to <max_threads> times.
+        return std::numeric_limits<size_t>::max();
+    }
+    return object_infos.size();
 }
 
 }

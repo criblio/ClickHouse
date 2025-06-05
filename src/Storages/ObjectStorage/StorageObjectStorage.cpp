@@ -162,7 +162,9 @@ StorageObjectStorage::StorageObjectStorage(
         }
     }
 
-    setVirtuals(VirtualColumnUtils::getVirtualsForFileLikeStorage(metadata.columns, context, sample_path, format_settings));
+    auto virtuals =VirtualColumnUtils::getVirtualsForFileLikeStorage(metadata.columns, context, sample_path, format_settings);
+
+    setVirtuals(VirtualColumnUtils::addCriblPathVirtuals(virtuals, context, sample_path, format_settings, configuration->getPath()));
     setInMemoryMetadata(metadata);
 }
 
@@ -680,6 +682,16 @@ bool StorageObjectStorage::Configuration::isPathWithGlobs() const
 bool StorageObjectStorage::Configuration::isNamespaceWithGlobs() const
 {
     return getNamespace().find_first_of("*?{") != std::string::npos;
+}
+
+bool StorageObjectStorage::Configuration::isCriblSyntax() const
+{
+    return getPath().find("${") != std::string::npos;
+}
+
+std::string StorageObjectStorage::Configuration::getBasePathForCriblSyntax() const
+{
+    return getPath().substr(0, getPath().find("${"));
 }
 
 std::string StorageObjectStorage::Configuration::getPathWithoutGlobs() const
