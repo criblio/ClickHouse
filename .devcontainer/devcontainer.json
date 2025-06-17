@@ -51,5 +51,5 @@
     "remoteUser": "vscode",
     "forwardPorts": [9000, 9440],
     "portsAttributes": {"9000": {"label": "Clickhouse"}, "9440": {"label": "Clickhouse"}},
-    "postCreateCommand": "sudo apt-get update && sudo apt-get install -y cmake ccache ninja-build nasm yasm gawk lsb-release software-properties-common gnupg"
+    "postCreateCommand": "sudo apt-get update && sudo apt-get install -y cmake ccache ninja-build nasm yasm gawk lsb-release software-properties-common gnupg && rustup toolchain install nightly-2024-12-01"
 }
